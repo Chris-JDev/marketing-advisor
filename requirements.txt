@@ -1,0 +1,9 @@
+streamlit
+requests
+python-dotenv           # if you ever need to load a .env locally
+langchain
+langchain-ollama
+chromadb
+langchain-community
+pdfplumber
+python-docx
