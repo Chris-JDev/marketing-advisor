@@ -1,0 +1,15 @@
+# render.yaml
+
+services:
+  - type: web
+    name: marketing-advisor
+    env: python
+    region: oregon                # or choose your region
+    branch: main                  # the Git branch to deploy
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run app.py --server.port 10000 --server.address 0.0.0.0
+    envVars:
+      - key: OLLAMA_BASE_URL
+        # Set this in the dashboard to your public Ollama server URL,
+        # or leave it blank if you host Ollama elsewhere.
+        value: https://your-ollama-instance.com
