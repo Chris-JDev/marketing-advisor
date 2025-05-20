@@ -7,18 +7,25 @@ import shutil
 from typing import Optional, Dict, Any
 
 import streamlit as st
-import requests
 from dotenv import load_dotenv
+import requests
 
 from langchain.chains import RetrievalQA
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PDFPlumberLoader, TextLoader, Docx2txtLoader
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 from langchain_community.vectorstores import Chroma
-from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplate, SystemMessagePromptTemplate
+from langchain_core.prompts import (
+    ChatPromptTemplate,
+    HumanMessagePromptTemplate,
+    SystemMessagePromptTemplate,
+)
 
 # Load environment variables
 load_dotenv()
+
+# Set up Streamlit page config immediately
+st.set_page_config(page_title='Marketing Advisor', page_icon='📊', layout='wide')
 
 # ---------- Configuration ----------
 OLLAMA_BASE_URL = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')
@@ -55,7 +62,7 @@ AIDA_DESCRIPTION = (
     'Use this framework to guide prospects from awareness to conversion.'
 )
 
-# ---------- Helper Functions ----------
+# ---------- Helpers ----------
 def classify_campaign(text: str) -> Optional[str]:
     tl = text.lower()
     for camp, pats in CAMPAIGN_PATTERNS.items():
@@ -86,6 +93,8 @@ def get_ollama_client(model: str = 'llama2', temp: float = 0.3):
 
 @st.cache_resource(show_spinner=False)
 def process_documents(files):
+    """Load, split, embed documents; show progress to user."""
+    # Load files
     with tempfile.TemporaryDirectory() as td:
         paths = []
         for f in files:
@@ -97,39 +106,48 @@ def process_documents(files):
         texts = []
         for p in paths:
             try:
-                if p.endswith('.pdf'):
-                    loader = PDFPlumberLoader(p)
-                elif p.endswith('.docx'):
-                    loader = Docx2txtLoader(p)
-                else:
-                    loader = TextLoader(p)
+                loader = (
+                    PDFPlumberLoader(p) if p.endswith('.pdf') else
+                    Docx2txtLoader(p)  if p.endswith('.docx') else
+                    TextLoader(p)
+                )
                 texts.extend(loader.load())
             except Exception as e:
                 st.error(f'Load error {os.path.basename(p)}: {e}')
 
+        st.write(f'Loaded {len(texts)} document pages. Splitting into chunks...')
         if not texts:
             st.error('No documents loaded.')
             return None
 
         splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
         chunks = splitter.split_documents(texts)
+        st.write(f'Generated {len(chunks)} chunks.')
         if not chunks:
             st.error('No chunks generated.')
             return None
 
+        # Prepare vector store dir
         dbdir = './marketing_db'
         if os.path.exists(dbdir):
             shutil.rmtree(dbdir, onerror=lambda fn, path, exc: (os.chmod(path, 0o777), fn(path)))
 
-        for emb_model in ['nomic-embed-text', 'all-MiniLM', 'llama2']:
+        # Embed with progress
+        models = ['nomic-embed-text', 'all-MiniLM', 'llama2']
+        progress = st.progress(0)
+        for i, emb_model in enumerate(models, 1):
+            st.info(f'Embedding with {emb_model} ({i}/{len(models)})')
             try:
                 emb = OllamaEmbeddings(base_url=OLLAMA_BASE_URL, model=emb_model)
                 if not emb.embed_query(chunks[0].page_content[:30]):
+                    st.warning(f'{emb_model} produced empty embedding; skipping.')
                     continue
                 store = Chroma.from_documents(chunks, emb, persist_directory=dbdir)
+                st.success(f'Vectors stored with {emb_model}')
                 return store
-            except:
-                continue
+            except Exception as e:
+                st.warning(f'{emb_model} failed: {e}')
+            progress.progress(i/len(models))
 
         st.error('All embedding models failed.')
         return None
@@ -205,141 +223,9 @@ def init_state():
     )
 
 def main():
-    st.set_page_config(page_title='Marketing Advisor', page_icon='📊', layout='wide')
     init_state()
-
     with st.sidebar:
         st.title('Marketing Advisor')
 
         # Category selector
-        cat = st.selectbox(
-            'Focus area',
-            MARKETING_CATEGORIES,
-            index=MARKETING_CATEGORIES.index(st.session_state.selected_category)
-        )
-        if cat != st.session_state.selected_category:
-            st.session_state.selected_category = cat
-        st.info(CATEGORY_DESCRIPTIONS[cat])
-        st.markdown('---')
-
-        # Ollama connection check
-        if st.button('Check Ollama Connection'):
-            ok, msg = check_ollama_connection()
-            if ok:
-                st.success('Connected: ' + msg)
-            else:
-                st.error('Error: ' + msg)
-        st.markdown('---')
-
-        # Upload Resources
-        st.header('Upload Resources')
-        files = st.file_uploader(
-            'Upload marketing docs (PDF/DOCX/TXT)',
-            type=['pdf', 'docx', 'txt'],
-            accept_multiple_files=True
-        )
-        if files and st.button('Create Knowledge Base'):
-            vs = process_documents(files)
-            if vs:
-                st.session_state.vector_store = vs
-                st.session_state.qa_chain = None
-                st.success('Knowledge base created!')
-        st.markdown('---')
-
-        # Quick Idea Generator
-        st.header('Quick Idea Generator')
-        if st.button('Generate Quick Ideas'):
-            if not st.session_state.vector_store:
-                st.error('Please upload docs and Create Knowledge Base first.')
-            else:
-                with st.spinner('Generating…'):
-                    retr = get_retriever()
-                    docs = retr.get_relevant_documents(
-                        f'Generate 5 marketing ideas for {st.session_state.selected_category}'
-                    )
-                    ctx = '\n\n'.join(d.page_content for d in docs)
-                    prompt = (
-                        f'Context:\n{ctx}\n\n'
-                        f'Question: Generate 5 quick marketing ideas for {st.session_state.selected_category}. '
-                        'For each: headline + 1-sentence explanation.'
-                    )
-                    r = st.session_state.llm.invoke(prompt)
-                    ideas = getattr(r, 'content', str(r))
-                st.markdown(ideas)
-        st.markdown('---')
-
-        # AIDA Model Explanation
-        st.markdown('### AIDA Model Explanation')
-        if st.button('Show AIDA Explanation'):
-            st.markdown(AIDA_DESCRIPTION)
-        st.markdown('---')
-
-        # AIDA-Driven Marketing Plan
-        st.markdown('### AIDA-Driven Marketing Plan')
-        if st.button('Generate AIDA Plan'):
-            if not st.session_state.vector_store:
-                st.error('Please upload docs and Create Knowledge Base first.')
-            else:
-                with st.spinner('Generating AIDA plan…'):
-                    retr = get_retriever()
-                    docs = retr.get_relevant_documents(
-                        f'Generate an AIDA-structured marketing plan for {st.session_state.selected_category}'
-                    )
-                    ctx = '\n\n'.join(d.page_content for d in docs)
-                    prompt = (
-                        f'Context:\n{ctx}\n\n'
-                        f'Question: Generate a full marketing plan for {st.session_state.selected_category}, '
-                        'structured according to the AIDA model (Attention, Interest, Desire, Action).'
-                    )
-                    r = st.session_state.llm.invoke(prompt)
-                    plan = getattr(r, 'content', str(r))
-                st.markdown(plan)
-        st.markdown('---')
-
-        # Chat Management
-        st.header('Chat Management')
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button('Save Chat'):
-                if save_history(st.session_state.messages):
-                    st.success('Saved!')
-        with c2:
-            if st.button('Clear Chat'):
-                st.session_state.messages = []
-                st.success('Cleared!')
-        if st.session_state.available_histories:
-            h = st.selectbox('Load chat', [''] + st.session_state.available_histories)
-            if h and st.button('Load Selected Chat'):
-                msgs = load_history(h)
-                if msgs:
-                    st.session_state.messages = msgs
-                    st.success('Loaded!')
-    # Main chat area
-    st.title(f'Marketing Advisor: {st.session_state.selected_category}')
-    if not st.session_state.chat_started:
-        st.info('Use sidebar to upload docs or start chatting.')
-        if st.button('Start Chat'):
-            st.session_state.chat_started = True
-            st.experimental_rerun()
-    for msg in st.session_state.messages:
-        with st.chat_message(msg['role']):
-            st.markdown(msg['content'])
-    if ui := st.chat_input('Ask your marketing question…'):
-        st.session_state.chat_started = True
-        st.session_state.messages.append({'role': 'user', 'content': ui})
-        auto = classify_campaign(ui)
-        if auto:
-            st.session_state.selected_category = auto
-        if st.session_state.vector_store:
-            qa = init_qa_chain()
-            ans = qa.run(ui) if qa else 'Error: QA unavailable'
-        else:
-            r = st.session_state.llm.invoke(ui)
-            ans = getattr(r, 'content', str(r))
-        fr = format_resp(ans)
-        st.session_state.messages.append({'role': 'assistant', 'content': fr})
-        st.chat_message('assistant').markdown(fr)
-
-
-if __name__ == '__main__':
-    main()
+        cat = st.selectbox('Focus area', MARKETING_CATEGORIES, index=MARKETING_CATEGORIES.index(st.session_state.selected
