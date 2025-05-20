@@ -24,7 +24,7 @@ from langchain_core.prompts import (
 # Load environment variables
 load_dotenv()
 
-# Set up Streamlit page config immediately
+# Configure Streamlit page
 st.set_page_config(page_title='Marketing Advisor', page_icon='📊', layout='wide')
 
 # ---------- Configuration ----------
@@ -55,20 +55,20 @@ CATEGORY_DESCRIPTIONS = {
 # AIDA framework description
 AIDA_DESCRIPTION = (
     '**AIDA Marketing Model**\n'
-    '1. **Attention**: Capture awareness with compelling hooks or visuals.\n'
+    '1. **Attention**: Capture attention with compelling hooks or visuals.\n'
     '2. **Interest**: Maintain curiosity by highlighting benefits and features.\n'
     '3. **Desire**: Build emotional engagement through value propositions and social proof.\n'
     '4. **Action**: Prompt a clear next step such as purchase, sign-up, or inquiry.\n\n'
     'Use this framework to guide prospects from awareness to conversion.'
 )
 
-# ---------- Helpers ----------
+# ---------- Helper Functions ----------
 def classify_campaign(text: str) -> Optional[str]:
     tl = text.lower()
-    for camp, pats in CAMPAIGN_PATTERNS.items():
-        for p in pats:
-            if re.search(p, tl):
-                return camp
+    for campaign, patterns in CAMPAIGN_PATTERNS.items():
+        for pat in patterns:
+            if re.search(pat, tl):
+                return campaign
     return None
 
 @st.cache_data(show_spinner=False)
@@ -93,8 +93,7 @@ def get_ollama_client(model: str = 'llama2', temp: float = 0.3):
 
 @st.cache_resource(show_spinner=False)
 def process_documents(files):
-    """Load, split, embed documents; show progress to user."""
-    # Load files
+    """Load, split, embed documents; display progress."""
     with tempfile.TemporaryDirectory() as td:
         paths = []
         for f in files:
@@ -115,24 +114,23 @@ def process_documents(files):
             except Exception as e:
                 st.error(f'Load error {os.path.basename(p)}: {e}')
 
-        st.write(f'Loaded {len(texts)} document pages. Splitting into chunks...')
         if not texts:
             st.error('No documents loaded.')
             return None
+        st.write(f'Loaded {len(texts)} pages.')
 
         splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
         chunks = splitter.split_documents(texts)
-        st.write(f'Generated {len(chunks)} chunks.')
         if not chunks:
             st.error('No chunks generated.')
             return None
+        st.write(f'Generated {len(chunks)} chunks.')
 
-        # Prepare vector store dir
+        # Prepare vectorstore directory
         dbdir = './marketing_db'
         if os.path.exists(dbdir):
             shutil.rmtree(dbdir, onerror=lambda fn, path, exc: (os.chmod(path, 0o777), fn(path)))
 
-        # Embed with progress
         models = ['nomic-embed-text', 'all-MiniLM', 'llama2']
         progress = st.progress(0)
         for i, emb_model in enumerate(models, 1):
@@ -140,21 +138,21 @@ def process_documents(files):
             try:
                 emb = OllamaEmbeddings(base_url=OLLAMA_BASE_URL, model=emb_model)
                 if not emb.embed_query(chunks[0].page_content[:30]):
-                    st.warning(f'{emb_model} produced empty embedding; skipping.')
+                    st.warning(f'{emb_model} returned empty embedding; skipping.')
                     continue
                 store = Chroma.from_documents(chunks, emb, persist_directory=dbdir)
                 st.success(f'Vectors stored with {emb_model}')
                 return store
             except Exception as e:
                 st.warning(f'{emb_model} failed: {e}')
-            progress.progress(i/len(models))
+            progress.progress(i / len(models))
 
         st.error('All embedding models failed.')
         return None
 
 def get_retriever():
     vs = st.session_state.get('vector_store')
-    return vs.as_retriever(search_type='mmr', search_kwargs={'k':6,'fetch_k':8}) if vs else None
+    return vs.as_retriever(search_type='mmr', search_kwargs={'k':6, 'fetch_k':8}) if vs else None
 
 def get_prompt():
     return ChatPromptTemplate.from_messages([
@@ -202,8 +200,7 @@ def save_history(msgs, fname=None):
 
 def load_history(fname):
     try:
-        with open(os.path.join('chat_histories', fname)) as f:
-            return json.load(f)
+        return json.load(open(os.path.join('chat_histories', fname)))
     except Exception as e:
         st.error(f'Load error: {e}')
         return None
@@ -228,4 +225,15 @@ def main():
         st.title('Marketing Advisor')
 
         # Category selector
-        cat = st.selectbox('Focus area', MARKETING_CATEGORIES, index=MARKETING_CATEGORIES.index(st.session_state.selected
+        cat = st.selectbox(
+            'Focus area',
+            MARKETING_CATEGORIES,
+            index=MARKETING_CATEGORIES.index(st.session_state.selected_category)
+        )
+        if cat != st.session_state.selected_category:
+            st.session_state.selected_category = cat
+        st.info(CATEGORY_DESCRIPTIONS[cat])
+        st.markdown('---')
+
+        # Connection check
+        if st.button('Check Ollama Connection', key='conn'):
