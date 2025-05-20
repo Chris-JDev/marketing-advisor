@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# LangChain & Ollama
+# LangChain & Ollama imports
 from langchain.chains import RetrievalQA
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PDFPlumberLoader, TextLoader, Docx2txtLoader
@@ -25,12 +25,12 @@ from langchain_core.prompts import (
     SystemMessagePromptTemplate,
 )
 
-# ─── CONFIG ──────────────────────────────────────────────────────────────────────
+# ─── CONFIGURATION ──────────────────────────────────────────────────────────────
 
-# Ollama base URL (from env var or fallback)
+# Ollama server URL (set via environment variable or fallback to localhost)
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
-# Campaign categories & regex patterns
+# Campaign categories and regex patterns
 CAMPAIGN_PATTERNS = {
     "Digital Marketing":      [r"digital marketing", r"online marketing", r"website", r"app"],
     "Content Marketing":      [r"content marketing", r"blog", r"article", r"whitepaper"],
@@ -56,21 +56,21 @@ CATEGORY_DESCRIPTIONS = {
 # AIDA model description
 AIDA_DESCRIPTION = (
     "**AIDA Marketing Model**\n"
-    "1. **Attention**: Capture the audience's awareness of the product or service. Use headlines, visuals, or hooks.\n"
-    "2. **Interest**: Sustain interest by highlighting benefits, features, and engaging content.\n"
-    "3. **Desire**: Build desire through emotional appeals, social proof, and demonstrating value.\n"
-    "4. **Action**: Motivate the prospect to take a specific action (purchase, sign-up, inquire).\n"
-    "\nThis framework guides the creation of marketing messages that move a prospect from awareness to conversion."
+    "1. **Attention**: Capture the audience's awareness with compelling hooks or visuals.\n"
+    "2. **Interest**: Maintain curiosity by highlighting benefits and features.\n"
+    "3. **Desire**: Build emotional engagement through value propositions and social proof.\n"
+    "4. **Action**: Prompt a clear next step such as purchase, sign-up, or inquiry.\n\n"
+    "Use this framework to guide prospects from awareness to conversion."
 )
 
-# ─── HELPERS ─────────────────────────────────────────────────────────────────────
+# ─── HELPER FUNCTIONS ────────────────────────────────────────────────────────────
 
 def classify_campaign(text: str) -> Optional[str]:
-    tl = text.lower()
-    for camp, pats in CAMPAIGN_PATTERNS.items():
-        for p in pats:
-            if re.search(p, tl):
-                return camp
+    text_lower = text.lower()
+    for campaign, patterns in CAMPAIGN_PATTERNS.items():
+        for pat in patterns:
+            if re.search(pat, text_lower):
+                return campaign
     return None
 
 @st.cache_data(show_spinner=False)
@@ -81,7 +81,7 @@ def load_lottieurl(url: str) -> Optional[Dict[str, Any]]:
     except:
         return None
 
- def check_ollama_connection():
+def check_ollama_connection() -> (bool, str):
     try:
         client = ChatOllama(base_url=OLLAMA_BASE_URL, model="llama2", temperature=0.3)
         r = client.invoke("ping")
@@ -128,9 +128,9 @@ def process_documents(docs_list):
 
         dbdir = "./marketing_db"
         if os.path.exists(dbdir):
-            shutil.rmtree(dbdir, onerror=lambda fn,p,exc: (os.chmod(p,0o777), fn(p)))
+            shutil.rmtree(dbdir, onerror=lambda fn, path, exc: (os.chmod(path, 0o777), fn(path)))
 
-        for emb_model in ["nomic-embed-text","all-MiniLM","llama2"]:
+        for emb_model in ["nomic-embed-text", "all-MiniLM", "llama2"]:
             try:
                 st.info(f"Embedding with {emb_model}…")
                 emb = OllamaEmbeddings(base_url=OLLAMA_BASE_URL, model=emb_model)
@@ -146,29 +146,31 @@ def process_documents(docs_list):
         st.error("All embedding models failed.")
         return None
 
- def get_retriever():
+def get_retriever():
     vs = st.session_state.get("vector_store")
-    return vs.as_retriever(search_type="mmr", search_kwargs={"k":6,"fetch_k":8}) if vs else None
+    return vs.as_retriever(search_type="mmr", search_kwargs={"k": 6, "fetch_k": 8}) if vs else None
 
- def get_prompt():
+def get_prompt():
     return ChatPromptTemplate.from_messages([
         SystemMessagePromptTemplate.from_template(
             "You are a marketing QA system. Use only provided docs and structure answers with AIDA."
         ),
-        HumanMessagePromptTemplate.from_template(
+        HumanMessagePromptTemplate.from_TEMPLATE(
             "Context:\n{context}\n\nQuestion: {question}"
         ),
     ])
 
- def init_qa_chain():
+def init_qa_chain():
     if not st.session_state.get("qa_chain") and st.session_state.get("vector_store"):
         try:
-            llm = get_ollama_client("llama2",0.1)
+            llm = get_ollama_client("llama2", 0.1)
             retr = get_retriever()
             if retr:
                 qa = RetrievalQA.from_chain_type(
-                    llm=llm, chain_type="stuff", retriever=retr,
-                    chain_type_kwargs={"prompt":get_prompt()}
+                    llm=llm,
+                    chain_type="stuff",
+                    retriever=retr,
+                    chain_type_kwargs={"prompt": get_prompt()}
                 )
                 st.session_state.qa_chain = qa
                 return qa
@@ -176,126 +178,59 @@ def process_documents(docs_list):
             st.error(f"QA init error: {e}")
     return st.session_state.get("qa_chain")
 
- def format_resp(r):
+def format_resp(r):
     return getattr(r, "content", str(r)).strip()
 
- def save_history(msgs, fname=None):
-    os.makedirs("chat_histories",exist_ok=True)
+def save_history(msgs, fname=None):
+    os.makedirs("chat_histories", exist_ok=True)
     if not fname:
         fname = f"chat_{datetime.datetime.now():%Y%m%d_%H%M%S}.json"
-    path = os.path.join("chat_histories",fname)
+    path = os.path.join("chat_histories", fname)
     try:
-        with open(path,"w") as f: json.dump(msgs,f,indent=2)
+        with open(path, "w") as f:
+            json.dump(msgs, f, indent=2)
         return True
     except Exception as e:
         st.error(f"Save error: {e}")
         return False
 
- def load_history(fname):
+def load_history(fname):
     try:
-        with open(os.path.join("chat_histories",fname)) as f: return json.load(f)
+        with open(os.path.join("chat_histories", fname)) as f:
+            return json.load(f)
     except Exception as e:
         st.error(f"Load error: {e}")
         return None
 
- def init_state():
+def init_state():
     ss = st.session_state
-    ss.setdefault("messages",[])
-    ss.setdefault("vector_store",None)
-    ss.setdefault("qa_chain",None)
-    ss.setdefault("llm",get_ollama_client("llama2",0.3))
-    ss.setdefault("selected_category",MARKETING_CATEGORIES[0])
-    ss.setdefault("chat_started",False)
-    ss.setdefault("available_histories",[f for f in os.listdir("chat_histories") if f.endswith(".json")] if os.path.exists("chat_histories") else [])
-
-# ─── MAIN APP ────────────────────────────────────────────────────────────────────
+    ss.setdefault("messages", [])
+    ss.setdefault("vector_store", None)
+    ss.setdefault("qa_chain", None)
+    ss.setdefault("llm", get_ollama_client("llama2", 0.3))
+    ss.setdefault("selected_category", MARKETING_CATEGORIES[0])
+    ss.setdefault("chat_started", False)
+    ss.setdefault(
+        "available_histories",
+        [f for f in os.listdir("chat_histories") if f.endswith(".json")]
+        if os.path.exists("chat_histories") else []
+    )
 
 def main():
-    st.set_page_config(page_title="Marketing Advisor",page_icon="📊",layout="wide")
+    st.set_page_config(page_title="Marketing Advisor", page_icon="📊", layout="wide")
     init_state()
 
     with st.sidebar:
         st.title("Marketing Advisor")
 
-        cat = st.selectbox("Focus area",MARKETING_CATEGORIES,index=MARKETING_CATEGORIES.index(st.session_state.selected_category))
-        if cat!=st.session_state.selected_category: st.session_state.selected_category=cat
+        cat = st.selectbox(
+            "Focus area",
+            MARKETING_CATEGORIES,
+            index=MARKETING_CATEGORIES.index(st.session_state.selected_category)
+        )
+        if cat != st.session_state.selected_category:
+            st.session_state.selected_category = cat
         st.info(CATEGORY_DESCRIPTIONS[cat])
         st.markdown("---")
 
-        if st.button("Check Ollama Connection"):
-            ok,msg=check_ollama_connection()
-            if ok: st.success("Connected: "+msg)
-            else: st.error("Error: "+msg)
-        st.markdown("---")
-
-        st.header("Upload Resources")
-        files=st.file_uploader("Upload marketing docs (PDF/DOCX/TXT)",type=["pdf","docx","txt"],accept_multiple_files=True)
-        if files and st.button("Create Knowledge Base"):
-            vs=process_documents(files)
-            if vs: st.session_state.vector_store=vs;st.session_state.qa_chain=None;st.success("Knowledge base created!")
-        st.markdown("---")
-
-        st.header("Quick Idea Generator")
-        if st.button("Generate Quick Ideas"):
-            with st.spinner("Generating…"):
-                if st.session_state.vector_store:
-                    retr=get_retriever()
-                    docs=retr.get_relevant_documents(f"Generate 5 ideas for {st.session_state.selected_category}")
-                    ctx="\n\n".join(d.page_content for d in docs)
-                    prompt=(f"Based on these docs:\n{ctx}\nGenerate 5 quick marketing ideas for {st.session_state.selected_category}. For each: headline + 1-sentence explanation.")
-                    r=st.session_state.llm.invoke(prompt)
-                    ideas=getattr(r,"content",str(r))
-                else:
-                    r=st.session_state.llm.invoke(f"List 5 quick marketing ideas for {st.session_state.selected_category}.")
-                    ideas=getattr(r,"content",str(r))
-                st.session_state.messages.append({"role":"assistant","content":ideas})
-        st.markdown("---")
-
-        st.header("Chat Management")
-        c1,c2=st.columns(2)
-        with c1:
-            if st.button("Save Chat"): save_history(st.session_state.messages) and st.success("Saved!")
-        with c2:
-            if st.button("Clear Chat"): st.session_state.messages=[];st.success("Cleared!")
-        if st.session_state.available_histories:
-            h=st.selectbox("Load chat",[""]+st.session_state.available_histories)
-            if h and st.button("Load Selected Chat"):
-                msgs=load_history(h)
-                if msgs: st.session_state.messages=msgs;st.success("Loaded!")
-
-    st.title(f"Marketing Advisor: {st.session_state.selected_category}")
-
-    if not st.session_state.chat_started:
-        st.info("Use sidebar to upload docs or start chatting.")
-        if st.button("Start Chat"): st.session_state.chat_started=True;st.experimental_rerun()
-
-    for m in st.session_state.messages:
-        with st.chat_message(m["role"]): st.markdown(m["content"])
-
-    if ui:=st.chat_input("Ask your marketing question…"):
-        st.session_state.chat_started=True
-        st.session_state.messages.append({"role":"user","content":ui})
-
-        # AIDA explanation trigger
-        if "aida" in ui.lower():
-            st.session_state.messages.append({"role":"assistant","content":AIDA_DESCRIPTION})
-            st.chat_message("assistant").markdown(AIDA_DESCRIPTION)
-            return
-
-        # Auto-classify into category
-        auto=classify_campaign(ui)
-        if auto: st.session_state.selected_category=auto
-
-        if st.session_state.vector_store:
-            qa=init_qa_chain()
-            ans=qa.run(ui) if qa else "Error: QA unavailable"
-        else:
-            r=st.session_state.llm.invoke(ui)
-            ans=getattr(r,"content",str(r))
-
-        fr=format_resp(ans)
-        st.session_state.messages.append({"role":"assistant","content":fr})
-        st.chat_message("assistant").markdown(fr)
-
-if __name__=="__main__":
-    main()
+        if st.button("Check Ollama Connection"):...
